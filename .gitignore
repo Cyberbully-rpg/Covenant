@@ -6,7 +6,7 @@ chroma_db/
 mlruns/
 *.pkl
 *.joblib
-data/raw/
+data/raw/*
 data/processed/
 models/*.bin
 models/*.pt
@@ -14,3 +14,4 @@ node_modules/
 .next/
 .DS_Store
 *.log
+!data/raw/*.dvc

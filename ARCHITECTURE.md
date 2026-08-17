@@ -237,14 +237,16 @@ Two trivial retrievers bracket the problem before Phase 6 exists. Full corpus, 5
 
 | | random | tfidf |
 |---|---|---|
-| hit_rate@5 | 0.2226 | **0.5768** |
-| gold_recall | 0.1402 | 0.5398 |
-| gold_density | 0.0102 | 0.0332 |
-| mean_retrieved_chars | 7,401 | 8,741 |
+| hit_rate@5 | 0.2769 | **0.6934** |
+| gold_recall | 0.1532 | 0.5848 |
+| gold_density | 0.0097 | 0.0338 |
+| mean_retrieved_chars | 8,481 | 9,311 |
 
-**TF-IDF lift: +0.354** at comparable retrieval volume, so the gain is genuine retrieval quality rather than chunk-size inflation.
+**TF-IDF lift: +0.416** at comparable retrieval volume, so the gain is genuine retrieval quality rather than chunk-size inflation.
 
-**Phase 6 decision input (the reason these baselines exist):** plain lexical TF-IDF already reaches 0.577 hit_rate@5. Dense embedding retrieval must beat that by a worthwhile margin to justify Chroma + an embedding model + an ingestion pipeline. That bar is now measured, not assumed.
+**Re-measured after the Phase 4 preamble fix (§6B.1).** The originally reported figures were random 0.2226 / tfidf 0.5768 at 7,401 / 8,741 mean chars. Making the pre-first-header preamble reachable lifted tfidf hit_rate@5 by **+0.117** while `gold_density` held flat (0.0332 → 0.0338) against a 6.5% rise in retrieved chars — density holding as volume rises is what separates a real gain from chunk-size inflation (§6A.2). The same segmentation defect was therefore suppressing *both* retrieval and classification; it was found from the classifier side only because Phase 4 measures capture rate explicitly.
+
+**Phase 6 decision input (the reason these baselines exist):** plain lexical TF-IDF already reaches **0.693** hit_rate@5. Dense embedding retrieval must beat that by a worthwhile margin to justify Chroma + an embedding model + an ingestion pipeline. That bar is now measured, not assumed — and it is 0.693, not the 0.577 recorded before the preamble fix.
 
 ---
 
@@ -268,7 +270,7 @@ Full corpus, 510 contracts:
 
 **Gold-span capture rate is the segmentation ceiling**, measured before any model is trained: a gold span no segment overlaps is a label the classifier can never learn and retrieval can never hit. At 99.84%, Phase 2's segmentation is not the binding constraint on Phase 4/5 numbers.
 
-**Segmenter fix this exposed:** `cut_top_level` was discarding everything before the first header. That region is the title block, parties recital and execution date — the only place Document Name / Parties / Agreement Date / Effective Date ever appear. It is now emitted as a `[preamble]` segment. Measured corpus-wide over all 13,823 gold spans, **capture rate 79.45% → 99.84%** — one-fifth of all labels in the dataset were unreachable. Same pattern as §6.1: a defect all unit tests passed, caught by measuring against gold.
+**Segmenter fix this exposed:** `cut_top_level` was discarding everything before the first header. That region is the title block, parties recital and execution date — the only place Document Name / Parties / Agreement Date / Effective Date ever appear. It is now emitted as a `[preamble]` segment. Measured corpus-wide over all 13,823 gold spans, **capture rate 79.45% → 99.84%** — one-fifth of all labels in the dataset were unreachable. Same pattern as §6.1: a defect all unit tests passed, caught by measuring against gold. It was suppressing retrieval too — Phase 3's baselines were re-run after the fix and moved materially (§6A.3).
 
 **Class imbalance, reported not buried** (per TRD §4.1) — positives per category: min 22 (`Unlimited/All-You-Can-Eat-License`), median 200, max 653 (`License Grant`). 6/41 categories have <50 positive segments and 10/41 have <100, corpus-wide, before any split. Those categories cannot produce meaningful F1 regardless of model, and that is a data finding, not a model failure.
 

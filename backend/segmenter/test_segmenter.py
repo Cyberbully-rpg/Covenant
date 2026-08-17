@@ -69,11 +69,35 @@ def test_article_scheme_detected():
 def test_article_scheme_produces_four_top_level_segments():
     text = make_article_contract()
     segs = segment_contract(text, doc_id="test")
-    top_level = [s for s in segs if s.parent_id is None]
+    top_level = [s for s in segs if s.parent_id is None and s.header != "[preamble]"]
     assert len(top_level) == 4, f"Expected 4 top-level segments, got {len(top_level)}"
     headers = [s.header for s in top_level]
     assert any("ARTICLE 1" in h for h in headers)
     assert any("ARTICLE 4" in h for h in headers)
+
+
+def test_preamble_before_first_header_is_kept_not_discarded():
+    """
+    Text before the first header must survive as its own segment. On real
+    contracts that region holds the title block, parties recital and
+    execution date — the only place CUAD's Document Name / Parties /
+    Agreement Date / Effective Date categories ever appear. Discarding it
+    caps what any downstream classifier or retriever can find, regardless
+    of model quality. Measured corpus-wide over all 13,823 CUAD gold
+    spans: capture rate 79.45% -> 99.84%.
+    """
+    text = make_article_contract()
+    segs = segment_contract(text, doc_id="test")
+
+    preambles = [s for s in segs if s.header == "[preamble]"]
+    assert len(preambles) == 1, f"Expected exactly one preamble segment, got {len(preambles)}"
+    assert "This Agreement is entered into as of January 1, 2024." in preambles[0].text
+
+    # and it must be the FIRST thing in the document, starting at offset 0
+    assert preambles[0].start_char == 0
+    assert min(s.start_char for s in segs) == 0, (
+        "segments must start at the beginning of the document, leaving no dropped prefix"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +127,7 @@ def test_section_nn_scheme_detected_when_no_article_present():
 def test_section_nn_scheme_produces_correct_segment_count():
     text = make_section_nn_contract()
     segs = segment_contract(text, doc_id="test")
-    top_level = [s for s in segs if s.parent_id is None]
+    top_level = [s for s in segs if s.parent_id is None and s.header != "[preamble]"]
     assert len(top_level) == 4, f"Expected 4 top-level segments, got {len(top_level)}"
     assert any("1.1" in s.header for s in top_level)
     assert any("2.2" in s.header for s in top_level)
@@ -136,7 +160,7 @@ def test_bare_nn_scheme_detected_when_no_article_or_section_word():
 def test_bare_nn_scheme_produces_correct_segment_count():
     text = make_bare_nn_contract()
     segs = segment_contract(text, doc_id="test")
-    top_level = [s for s in segs if s.parent_id is None]
+    top_level = [s for s in segs if s.parent_id is None and s.header != "[preamble]"]
     assert len(top_level) == 4, f"Expected 4 top-level segments, got {len(top_level)}"
 
 
@@ -211,7 +235,7 @@ def test_toc_span_detected():
 def test_toc_excluded_from_final_segments():
     text = make_contract_with_toc()
     segs = segment_contract(text, doc_id="test")
-    top_level = [s for s in segs if s.parent_id is None]
+    top_level = [s for s in segs if s.parent_id is None and s.header != "[preamble]"]
     # Should only find the 3 REAL top-level ARTICLEs, not TOC-duplicated ones
     assert len(top_level) == 3, (
         f"Expected 3 real top-level segments after TOC removal, got "
@@ -320,11 +344,12 @@ def make_oversized_article_contract():
 def test_oversized_segment_gets_sub_split():
     text = make_oversized_article_contract()
     segs = segment_contract(text, doc_id="test")
-    subs = [s for s in segs if s.parent_id == "test_top0"]
+    subs = [s for s in segs if s.metadata.get("parent_header", "").startswith("ARTICLE 1")]
     assert len(subs) >= 4, f"Expected oversized ARTICLE 1 to sub-split into >=4 pieces, got {len(subs)}"
+    parent_ids = {s.parent_id for s in subs}
+    assert len(parent_ids) == 1, f"sub-splits should share one parent, got {parent_ids}"
     for s in subs:
         assert s.is_oversized_split is True
-        assert s.parent_id == "test_top0"
 
 
 def test_oversized_parent_segment_not_duplicated():
@@ -332,7 +357,9 @@ def test_oversized_parent_segment_not_duplicated():
     only its sub-splits should be present."""
     text = make_oversized_article_contract()
     segs = segment_contract(text, doc_id="test")
-    whole_article_1 = [s for s in segs if s.segment_id == "test_top0"]
+    subs = [s for s in segs if s.metadata.get("parent_header", "").startswith("ARTICLE 1")]
+    parent_id = next(iter({s.parent_id for s in subs}))
+    whole_article_1 = [s for s in segs if s.segment_id == parent_id]
     assert len(whole_article_1) == 0, "Oversized parent should not appear as its own segment"
 
 

@@ -162,7 +162,7 @@ Routing is resolved by **which code path is executing**, never by a request-time
 | **2** | Segmentation engine | ✅ **Complete** | Cascading pattern-detection segmenter, 16 tests, validated against real CUAD contracts. Generalization gap found and fixed during Phase 3 (see §6) |
 | **3** | Eval harness skeleton | 🔶 **Steps 1–2 complete; step 3 deferred to Phase 7 (current phase)** | Eval set from CUAD's native QA triples + retrieval-correctness metric + baselines ✅. Faithfulness judge & logging schema → Phase 7 |
 | **4** | Classical classifier baseline | ✅ **Complete** | Training-set construction from gold spans + contract-level split + TF-IDF/weighted-logreg baseline over all 41 categories, MLflow tracking live (see §6B) |
-| **5** | Classifier feature improvements | 🔶 **Steps 1–3 complete + zero-shot diagnostic run; steps 4–5 decision open** | N-grams + structural features + tuned thresholds all adopted, macro-F1 0.430 → 0.501. Zero-shot diagnostic (Ollama vs. Gemini) points to a representation gap, not label noise — see §6C |
+| **5** | Classifier feature improvements | 🔶 **Steps 1–3 complete + diagnostic + richer-features follow-up run; steps 4–5 explicitly deferred** | N-grams + structural features + tuned thresholds + category-similarity feature all adopted, macro-F1 0.430 → 0.503. Diagnostic (3 backends) + trigrams/similarity follow-up both point to a representation ceiling, not label noise or data quantity — see §6C |
 | **6** | RAG retrieval path | ⬜ Not started (next) | Chroma ingestion, retrieval logic, full-document search validated against harness before generation added |
 | **7** | RAG generation + inference backend | ⬜ Not started | Ollama/cloud routing wired in, faithfulness judge + harness logging schema built and go live (deferred here from Phase 3, step 3) |
 | **8** | Classifier-to-RAG hard filter integration | ⬜ Not started | Metadata filter wired in, filter-on/filter-off precision@k ablation run as portfolio artifact |
@@ -358,7 +358,21 @@ TRD §4.3 step 4 (imbalance handling beyond weighted loss) and step 5 (logreg+XG
 
 **Diagnostic finding (the actual TRD §4.4 question — gap or noise?):** Groq per-category breakdown — `Competitive Restriction Exception` 16/16, `Third Party Beneficiary` 14/16, `Price Restrictions` 13/16. A zero-shot model clears ~90% on a balanced sample where the classical champion scores **F1 = 0.000**. That gap is real learnable signal a linear TF-IDF model isn't capturing — this reads as a **representation/capacity gap, not CUAD label noise**, and the finding is now corroborated by two independent models (Ollama 77%, Groq 90%) rather than one. (Caveat: this sample is small, class-balanced 50/50 unlike the real ~0.3–0.6% positive rate, and accuracy isn't F1 — not rigorous evidence, just enough to answer the diagnostic's one question per TRD §4.4's stated scope.)
 
-**Consequence for steps 4–5:** the "low support, not fixable by SMOTE/ensembling" read in §6C.4 is now in tension with this finding — every backend tested finds signal these categories' classical features don't expose. Recommendation: before running SMOTE or ensembling, try richer text representation (the categories' CUAD "Details" question text hints at multi-clause reasoning TF-IDF can't do) rather than jumping straight to imbalance handling. This is a judgment call for the project owner, not run yet.
+**Consequence for steps 4–5:** the "low support, not fixable by SMOTE/ensembling" read in §6C.4 is now in tension with this finding — every backend tested finds signal these categories' classical features don't expose. Acted on in §6C.6 below.
+
+### 6C.6 Richer-features follow-up (tried before steps 4–5; NOT on TRD's locked ladder)
+
+Motivated directly by §6C.5's finding: a zero-shot LLM with **zero training examples** cleared ~80–90% on the categories the champion scores F1 = 0.000 on. If the champion's failure were a data-*quantity* problem, giving a model *less* data should make it worse, not better — so SMOTE/ensembling (both data-quantity levers) were set aside in favor of testing whether a *richer representation* could close the gap first. Same evidence-gating discipline as §6C.1: each candidate applied on top of the champion, kept only if it beats the champion's macro-F1.
+
+**Candidate A — trigrams** (`ngram_range=(1,3)`, cheap sanity check): **macro-F1 0.5009 → 0.4777 (−0.023), rejected at all 3 seeds tested (42/7/123).** Feature explosion without added signal — extending the n-gram window doesn't help when the real problem is relational (see below), not vocabulary coverage.
+
+**Candidate B — category-definition similarity** (`features/category_similarity.py`): one extra column per classifier — cosine similarity (via the shared TF-IDF space) between the clause and CUAD's own definition text for that category, e.g. *"is there a restriction on the ability of a party to raise or reduce prices."* Targets the relational gap directly, still classical (no transformer). **macro-F1 0.5009 → 0.5034 (+0.0025), consistently positive across all 3 seeds (+0.0025 / +0.0027 / +0.0057) — small but real, adopted.**
+
+**Neither candidate cracked the 3 target categories at seed 42** (all three stayed at F1 = 0.000 with candidate B). But at other seeds, candidate B did occasionally move them — `Price Restrictions` 0.000 → 0.162 at seed 7, `Third Party Beneficiary` 0.000 → 0.200 at seed 123 — inconsistent because these categories have only 18–29 training examples, so which few examples land in train vs. test swings the result. This is itself informative: the signal candidate B adds is real (consistent small macro-F1 gain, occasional real per-category wins) but too weak on its own to reliably rescue categories this rare.
+
+**Why a TF-IDF-based similarity feature is a partial fix, not the fix:** cosine similarity between two bag-of-words vectors is still just weighted word overlap between the clause and CUAD's question text — it doesn't capture the actual relational reasoning ("an exception carved out of a Non-Compete clause defined elsewhere in the document") that the zero-shot LLM's contextual understanding does. The natural non-speculative next step is **not** transformer fine-tuning (still shelved per TRD §4.2) — it's reusing the sentence-transformer embeddings Phase 6 is already building for RAG chunking as a classifier feature, once they exist. That's deferred to whenever Phase 6 lands, not run now.
+
+**Decision on steps 4–5 (SMOTE/ensembling): still not run.** The richer-features experiment didn't invalidate the original read — it's still a representation ceiling, and the richer-features attempt (candidate B) getting *some* real per-category wins where SMOTE/ensembling would only synthesize or combine more of the same weak word-count vectors reinforces rather than reverses that conclusion. Left open for the project owner to decide: accept the current champion (macro-F1 0.501, with the 3 categories as a documented, honestly-reported limitation) and move to Phase 6, or hold Phase 5 open for the embedding-feature idea once Phase 6's sentence-transformers exist.
 
 ---
 
@@ -375,7 +389,7 @@ TRD §4.3 step 4 (imbalance handling beyond weighted loss) and step 5 (logreg+XG
 - **Structured data store:** SQLite
 - **Multi-agent roles:** Claude = architect, Gemini = debugger, Grok = tester
 - **Coordination artifact:** `PROJECT_LEDGER.md` — *not currently in the repo; `ledger.md` was removed in the Phase 2 commit. This doc set (PRD/TRD/ARCHITECTURE) plus `CLAUDE.md` is the de facto handoff artifact.*
-- **Testing:** pytest, defaults (no `pytest.ini`/`pyproject.toml`). Test files sit beside the module they test. Current suite: 58 tests (16 segmenter + 12 eval scorer + 11 split + 6 classifier baseline + 7 structural features + 6 ladder runner)
+- **Testing:** pytest, defaults (no `pytest.ini`/`pyproject.toml`). Test files sit beside the module they test. Current suite: 62 tests (16 segmenter + 12 eval scorer + 11 split + 6 classifier baseline + 7 structural features + 6 ladder runner + 4 category-similarity)
 
 ### 7.1 Generated artifacts (not in git)
 

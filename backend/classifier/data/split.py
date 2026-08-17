@@ -21,6 +21,7 @@ import random
 
 DEFAULT_SEED = 42
 DEFAULT_TEST_FRAC = 0.2
+DEFAULT_VAL_FRAC = 0.16   # of the whole corpus, i.e. 20% of the training pool
 
 
 def split_contract_ids(
@@ -45,3 +46,32 @@ def split_examples(
     train = [e for e in examples if e["contract_id"] not in test_set]
     test = [e for e in examples if e["contract_id"] in test_set]
     return train, test
+
+
+def split_examples_three_way(
+    examples,
+    test_frac: float = DEFAULT_TEST_FRAC,
+    val_frac: float = DEFAULT_VAL_FRAC,
+    seed: int = DEFAULT_SEED,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """
+    Partition into (train, val, test), still by contract.
+
+    The test set is carved out FIRST with exactly the same call the
+    two-way split uses, so it contains exactly the same contracts as the
+    Phase 4 baseline's test set at the same seed. Phase 5 numbers are
+    therefore directly comparable to Phase 4's on the test side; only the
+    training pool shrinks, which is why the ladder is measured against a
+    same-data control run rather than against Phase 4's printed figure.
+
+    Validation exists because per-category decision thresholds (ladder
+    step 3) have to be chosen on data the model did not train on AND that
+    is not the test set. Tuning thresholds on test would be selecting the
+    reported metric directly — the number would be meaningless.
+    """
+    train_pool, test = split_examples(examples, test_frac, seed)
+    # val_frac is expressed as a fraction of the WHOLE corpus, so rescale
+    # it to a fraction of the remaining training pool.
+    pool_frac = val_frac / (1.0 - test_frac)
+    train, val = split_examples(train_pool, pool_frac, seed)
+    return train, val, test

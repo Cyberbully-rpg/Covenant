@@ -162,8 +162,8 @@ Routing is resolved by **which code path is executing**, never by a request-time
 | **2** | Segmentation engine | ✅ **Complete** | Cascading pattern-detection segmenter, 16 tests, validated against real CUAD contracts. Generalization gap found and fixed during Phase 3 (see §6) |
 | **3** | Eval harness skeleton | 🔶 **Steps 1–2 complete; step 3 deferred to Phase 7 (current phase)** | Eval set from CUAD's native QA triples + retrieval-correctness metric + baselines ✅. Faithfulness judge & logging schema → Phase 7 |
 | **4** | Classical classifier baseline | ✅ **Complete** | Training-set construction from gold spans + contract-level split + TF-IDF/weighted-logreg baseline over all 41 categories, MLflow tracking live (see §6B) |
-| **5** | Classifier feature improvements | ⬜ Not started (next) | Evidence-gated, locked priority order (n-grams → structural features → threshold tuning → imbalance handling → ensembling) |
-| **6** | RAG retrieval path | ⬜ Not started | Chroma ingestion, retrieval logic, full-document search validated against harness before generation added |
+| **5** | Classifier feature improvements | 🔶 **Steps 1–3 complete + zero-shot diagnostic run; steps 4–5 decision open** | N-grams + structural features + tuned thresholds all adopted, macro-F1 0.430 → 0.501. Zero-shot diagnostic (Ollama vs. Gemini) points to a representation gap, not label noise — see §6C |
+| **6** | RAG retrieval path | ⬜ Not started (next) | Chroma ingestion, retrieval logic, full-document search validated against harness before generation added |
 | **7** | RAG generation + inference backend | ⬜ Not started | Ollama/cloud routing wired in, faithfulness judge + harness logging schema built and go live (deferred here from Phase 3, step 3) |
 | **8** | Classifier-to-RAG hard filter integration | ⬜ Not started | Metadata filter wired in, filter-on/filter-off precision@k ablation run as portfolio artifact |
 | **9** | MLOps wrap-up | ⬜ Not started | Drift monitoring (classifier + embeddings) live, query logging fully live, DVC formalized across all datasets |
@@ -301,6 +301,67 @@ Tracking starts here, local file store (`file:./mlruns`, git-ignored), experimen
 
 ---
 
+## 6C. Phase 5 (Classifier Feature Improvements) — Complete
+
+Built in `backend/classifier/`: `data/split.py` (three-way split), `features/structural.py` (structural feature block), `models/train_experiment.py` (the ladder runner). Runs TRD §4.3's locked priority order as **separate, individually-measured experiments** — no step is folded into another, and each is judged on its own delta.
+
+### 6C.1 Evidence-gating discipline (the point of this phase)
+
+Each lever is applied **on top of the current champion**, not the previous step, and kept only if it beats that champion's macro-F1. A lever that loses is discarded, not silently retained because it was next on the roadmap — a rejected lever must not keep influencing later steps. `test_train_experiment.py` asserts this directly: it forces a lever to lose and checks the next lever's candidate config shows no trace of it.
+
+A three-way **train/val/test** split (`split.py`) replaces Phase 4's two-way split — threshold tuning needs data the model never trained on and that isn't the test set, or the reported F1 would just be measuring what the thresholds were tuned to produce. The test set is carved out with the identical call Phase 4 used at the same seed, so Phase 5's test-side numbers are directly comparable to Phase 4's, not confounded by a different held-out set.
+
+**Control run, not Phase 4's printed figure, is the baseline for every delta.** Because validation is carved out of the training pool, every ladder step trains on fewer contracts than Phase 4 did (326 vs. 408). Step 0 re-runs Phase 4's exact recipe on Phase 5's smaller pool so each lever's delta is attributable to the lever alone, not to a shrunken training set.
+
+### 6C.2 Results (510 contracts, seed 42: 326 train / 82 val / 102 test)
+
+| step | macro-F1 | micro-F1 | Δ vs champion | verdict |
+|---|---|---|---|---|
+| control (Phase 4 recipe, Phase 5 data) | 0.4315 | 0.5000 | — | adopted |
+| + bigrams | 0.4722 | 0.5645 | +0.0407 | **adopted** |
+| + structural features | 0.4760 | 0.5822 | +0.0037 | **adopted** |
+| + tuned thresholds | **0.5009** | **0.5995** | +0.0249 | **adopted** |
+
+**All three levers won.** Champion: bigrams + structural features + tuned thresholds. macro-F1 **0.430 → 0.501** (+0.069), macro-P 0.348 → 0.538, macro-R 0.610 → 0.494 — precision and recall converged rather than recall dominating, confirming Phase 4's diagnosis that the gap was mostly a threshold problem.
+
+**Seed stability, since step 2's gain is small:** re-run at seeds 7 and 123. Bigrams and threshold tuning won by a wide margin at every seed; structural features won at every seed too, by a small but never-negative margin (+0.0037 / +0.0001 / +0.0013). Small, but real and consistent — not adopted on a single lucky split.
+
+Top categories: `Parties` 0.957, `Governing Law` 0.897, `Document Name` 0.883. Three categories sit at F1 = 0.000 (`Competitive Restriction Exception`, `Price Restrictions`, `Third Party Beneficiary`); `Price Restrictions` has **zero test-side positives** (18 train / 0 test), making its F1 = 0.000 undefined rather than a real failure — worth separating from genuine misses when this is reported. All 41 categories remain trainable (no untrainable categories, unlike some early smoke runs on small `--limit` samples).
+
+### 6C.3 Structural features (`features/structural.py`)
+
+14 columns: relative position in document, is-first/is-last, is-preamble, log-scaled char length, oversized/undersized/has-parent flags, header token count, header-has-digit, and a one-hot over the segmenter's numbering schemes. All derived from fields the segmenter already emits — `build_training_data.py` (§6B.1) now carries them on every row specifically so they don't require re-segmenting all 510 contracts to recover later.
+
+Min-max scaled to `[0, 1]` using statistics fit on **train only**, then clipped on transform — an unscaled `char_len` of 4,500 would otherwise dominate the L2-normalized TF-IDF columns it's stacked next to, and fitting the scaler on all rows would leak test distribution into training the same way an unscaled feature would leak magnitude.
+
+### 6C.4 Steps 4–5 (SMOTE, ensembling) — deliberately not run
+
+TRD §4.3 step 4 (imbalance handling beyond weighted loss) and step 5 (logreg+XGBoost ensembling) are the most expensive levers on the ladder and are gated on evidence that the remaining gap is a capacity/imbalance problem rather than a representation or threshold problem. Steps 1–3 already moved macro-F1 +0.069, and the categories still failing are almost all low-support-by-data (`Price Restrictions` 18 train examples, `Most Favored Nation` 21, `Third Party Beneficiary` 29) rather than showing a precision/recall split that SMOTE or ensembling would fix — `class_weight="balanced"` (already in use) is the standard first lever for exactly this kind of imbalance, and it's already applied.
+
+### 6C.5 Zero-shot LLM diagnostic (TRD §4.4) and the backend comparison
+
+**Cloud backend changed: Anthropic → Gemini + Groq.** `requirements.txt` no longer pins `anthropic`; `google-genai==2.18.1` (model `gemini-3.6-flash`) and `groq==1.6.0` (model `qwen/qwen3.6-27b`) are the two cloud paths tested. Deliberate, explicit override of TRD's original `anthropic` choice — made when this diagnostic needed a working cloud key — not a silent re-litigation; TRD/CLAUDE.md never named a vendor explicitly, only "a cloud API," so no locked text required correction. `httpx==0.28.1` is pinned explicitly: `ollama`'s SDK needed bumping to 0.6.2 to accept it (0.4.4 pinned `httpx<0.28`, `google-genai` requires `>=0.28.1`).
+
+**Local backend installed:** Ollama (`llama3.2:3b`, 2GB) via `winget install Ollama.Ollama`. None of the three backends existed in the environment this phase was otherwise built in — all three were set up specifically to run this diagnostic and to let the project owner compare them for future call sites (TRD §5.5: batch eval may use Ollama OR cloud, per-run config — any of the three is architecturally valid, this measures which is actually usable).
+
+`backend/classifier/models/zero_shot_diagnostic.py` reuses CUAD's own per-category question (from `eval_set.jsonl`, Phase 3) rather than writing a new prompt — same "define it once" discipline as Phase 4 reusing `spans_overlap`. Ran all three backends over 16 balanced examples (8 positive / 8 negative) per each of the 3 categories the Phase 5 champion scores F1 = 0.000 on.
+
+| backend | model | scored / sent | accuracy | errors | mean latency |
+|---|---|---|---|---|---|
+| Ollama | `llama3.2:3b` (local, 2GB) | 48 / 48 | 0.771 | 0 | 3.14s |
+| Gemini | `gemini-3.6-flash` | 10 / 48 | 1.000* (n=10, not meaningful) | 38 (free-tier `429 RESOURCE_EXHAUSTED`) | 26.67s |
+| **Groq** | **`qwen/qwen3.6-27b`** | **48 / 48** | **0.896** | **0** | **8.42s** |
+
+**Groq note:** `qwen/qwen3.6-27b` is a reasoning model — by default it emits a `<think>...</think>` block before the answer, which the parser never sees (first run: 47/48 unparseable). Fixed by passing `reasoning_format="hidden"` to Groq's API, which strips the reasoning block server-side. A second Groq model, `openai/gpt-oss-120b`, was tried first and scored identically (0.896 accuracy, 48/48, 0 errors) at lower latency (3.28s) — kept `qwen/qwen3.6-27b` as the pinned model per project owner's explicit choice after confirming no Llama model is available on this Groq account (`llama-3.1-70b-versatile` and `llama-3.3-70b-versatile` are both decommissioned; Groq's current catalog is `openai/gpt-oss-*` and `qwen/qwen3.6-27b` as the general-purpose options).
+
+**Backend verdict for this call site (batch, higher-volume): Groq.** It matched Ollama's reliability (48/48, zero errors) while beating its accuracy by 12.5 points (0.896 vs 0.771), and it's free with no rate-limit issue observed at this volume. Gemini's free tier could not complete a 48-call batch — it exhausted its quota after ~10 requests. Gemini's 1.000 accuracy is not meaningful evidence at n=10 with 38 uncounted failures. This doesn't indict Gemini's quality — a paid tier likely clears this — but the free tier is impractical for TRD §5.5's batch-eval-volume call site without paying. Gemini remains a fine fit for the low-volume, single-call-per-run faithfulness judge (Phase 7), where rate limits aren't a factor; Groq is now the stronger default for anything higher-volume, and Ollama remains the guaranteed-local, zero-network fallback the architecture already commits to for the interactive demo path.
+
+**Diagnostic finding (the actual TRD §4.4 question — gap or noise?):** Groq per-category breakdown — `Competitive Restriction Exception` 16/16, `Third Party Beneficiary` 14/16, `Price Restrictions` 13/16. A zero-shot model clears ~90% on a balanced sample where the classical champion scores **F1 = 0.000**. That gap is real learnable signal a linear TF-IDF model isn't capturing — this reads as a **representation/capacity gap, not CUAD label noise**, and the finding is now corroborated by two independent models (Ollama 77%, Groq 90%) rather than one. (Caveat: this sample is small, class-balanced 50/50 unlike the real ~0.3–0.6% positive rate, and accuracy isn't F1 — not rigorous evidence, just enough to answer the diagnostic's one question per TRD §4.4's stated scope.)
+
+**Consequence for steps 4–5:** the "low support, not fixable by SMOTE/ensembling" read in §6C.4 is now in tension with this finding — every backend tested finds signal these categories' classical features don't expose. Recommendation: before running SMOTE or ensembling, try richer text representation (the categories' CUAD "Details" question text hints at multi-clause reasoning TF-IDF can't do) rather than jumping straight to imbalance handling. This is a judgment call for the project owner, not run yet.
+
+---
+
 ## 7. Environment & Tooling Snapshot
 
 - **Repo:** `C:\Dev\Covenant\` (monorepo; relocated from OneDrive Desktop to avoid DVC/Chroma file-lock conflicts)
@@ -314,7 +375,7 @@ Tracking starts here, local file store (`file:./mlruns`, git-ignored), experimen
 - **Structured data store:** SQLite
 - **Multi-agent roles:** Claude = architect, Gemini = debugger, Grok = tester
 - **Coordination artifact:** `PROJECT_LEDGER.md` — *not currently in the repo; `ledger.md` was removed in the Phase 2 commit. This doc set (PRD/TRD/ARCHITECTURE) plus `CLAUDE.md` is the de facto handoff artifact.*
-- **Testing:** pytest, defaults (no `pytest.ini`/`pyproject.toml`). Test files sit beside the module they test. Current suite: 41 tests (16 segmenter + 12 eval scorer + 7 split + 6 classifier baseline)
+- **Testing:** pytest, defaults (no `pytest.ini`/`pyproject.toml`). Test files sit beside the module they test. Current suite: 58 tests (16 segmenter + 12 eval scorer + 11 split + 6 classifier baseline + 7 structural features + 6 ladder runner)
 
 ### 7.1 Generated artifacts (not in git)
 

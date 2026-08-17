@@ -24,6 +24,11 @@ because both change how Phase 4 must be built:
      it's a segmentation ceiling, not a model failure. Measuring it here
      keeps Phase 2's quality visible in Phase 4's numbers.
 
+Each row also carries the segment's structural fields (position in the
+document, length, scheme, header, oversized/undersized flags). They cost
+nothing to emit here and are ladder step 2's input (TRD §4.3); recovering
+them later would mean re-segmenting all 510 contracts.
+
 Split discipline: any train/test split MUST be BY CONTRACT, never by
 segment. Segments from one contract share vocabulary, formatting, and
 defined terms; splitting by segment leaks that across the boundary and
@@ -97,7 +102,8 @@ def build(limit: int | None = None) -> dict:
                 if any(spans_overlap(g, s) for s in seg_spans):
                     spans_captured += 1
 
-        for seg, span in zip(segments, seg_spans):
+        n_segs = len(segments)
+        for idx, (seg, span) in enumerate(zip(segments, seg_spans)):
             labels = [
                 cat for cat in all_categories
                 if any(spans_overlap(span, g) for g in gold.get((cid, cat), []))
@@ -111,6 +117,19 @@ def build(limit: int | None = None) -> dict:
                 "text": seg.text,
                 "labels": labels,
                 "n_labels": len(labels),
+                # Structural fields (Phase 5 ladder step 2, TRD §4.3). Emitted
+                # here rather than recomputed at train time because they are a
+                # byproduct of segmentation that would otherwise be thrown away
+                # and require re-segmenting all 510 contracts to recover.
+                "position": idx,
+                "relative_position": idx / n_segs if n_segs else 0.0,
+                "n_segments_in_contract": n_segs,
+                "char_len": len(seg.text),
+                "header": seg.header,
+                "scheme": seg.scheme,
+                "is_oversized_split": bool(seg.is_oversized_split),
+                "is_undersized": bool(seg.is_undersized),
+                "has_parent": seg.parent_id is not None,
             })
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)

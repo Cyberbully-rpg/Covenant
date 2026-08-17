@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from split import split_contract_ids, split_examples  # noqa: E402
+from split import split_contract_ids, split_examples, split_examples_three_way  # noqa: E402
 
 
 def make_examples(n_contracts=50, per_contract=10):
@@ -75,3 +75,41 @@ def test_tiny_corpus_still_yields_a_nonempty_test_set():
     train_ids, test_ids = split_contract_ids(["a", "b", "c"], test_frac=0.2)
     assert len(test_ids) >= 1
     assert len(train_ids) >= 1
+
+
+def test_three_way_split_all_sides_are_mutually_disjoint():
+    examples = make_examples(n_contracts=100)
+    train, val, test = split_examples_three_way(examples)
+    train_ids = {e["contract_id"] for e in train}
+    val_ids = {e["contract_id"] for e in val}
+    test_ids = {e["contract_id"] for e in test}
+    assert not (train_ids & val_ids)
+    assert not (train_ids & test_ids)
+    assert not (val_ids & test_ids)
+
+
+def test_three_way_split_covers_every_example_exactly_once():
+    examples = make_examples(n_contracts=100)
+    train, val, test = split_examples_three_way(examples)
+    assert len(train) + len(val) + len(test) == len(examples)
+
+
+def test_three_way_split_test_side_matches_two_way_split():
+    """
+    The test set carved out by the three-way split must be IDENTICAL to
+    the one the two-way split (used by Phase 4's baseline) produces at the
+    same seed — otherwise Phase 5's reported numbers aren't comparable to
+    Phase 4's on the test side, which is the whole point of using the same
+    seed.
+    """
+    examples = make_examples(n_contracts=100)
+    _, two_way_test = split_examples(examples)
+    _, _, three_way_test = split_examples_three_way(examples)
+    assert ({e["contract_id"] for e in two_way_test} ==
+            {e["contract_id"] for e in three_way_test})
+
+
+def test_three_way_split_val_is_nonempty():
+    examples = make_examples(n_contracts=100)
+    _, val, _ = split_examples_three_way(examples)
+    assert len(val) > 0

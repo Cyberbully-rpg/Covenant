@@ -43,6 +43,9 @@ python backend/segmenter/segmenter.py data/interim/harpoon_sample.txt
 # Classifier (Phase 4) — build labels, then train the baseline
 python backend/classifier/data/build_training_data.py  # + gold-span capture rate
 python backend/classifier/models/train_baseline.py     # + MLflow run
+
+# Classifier (Phase 5) — escalation ladder (n-grams -> structural -> tuned thresholds)
+python backend/classifier/models/train_experiment.py   # + MLflow run per step
 ```
 
 There is no lint/format/build tooling configured yet, and no `pytest.ini`/`pyproject.toml` — pytest
@@ -116,11 +119,13 @@ CUAD JSON → Segmenter → ⎡ raw text      → Classifier (41-label, TF-IDF+L
 
 ### Current phase
 
-Phase 5 (classifier feature improvements) — not started; next up. Phases 0–4 are complete: repo
-scaffolding, CUAD acquisition/EDA, segmenter, eval harness (steps 1–2; step 3 deferred to Phase 7),
-and the classical classifier baseline (`backend/classifier/`, macro-F1 0.430 / micro-F1 0.488).
+Phase 5 (classifier feature improvements) — steps 1–3 complete (n-grams, structural features, tuned
+thresholds all adopted; macro-F1 0.430 → 0.501). Zero-shot LLM diagnostic and the steps 4–5
+(SMOTE/ensembling) decision are pending — blocked on a live Ollama instance or a cloud API key, neither
+configured in this environment yet. Phases 0–4 are complete: repo scaffolding, CUAD acquisition/EDA,
+segmenter, eval harness (steps 1–2; step 3 deferred to Phase 7), and the classical classifier baseline.
 See `ARCHITECTURE.md` §5 for the full 13-phase roadmap and status table before assuming what's built,
-and §6B for the Phase 4 numbers Phase 5 has to beat.
+and §6C for the Phase 5 ladder results and what's still open.
 
 ## Working conventions specific to this project
 

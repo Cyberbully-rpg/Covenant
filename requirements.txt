@@ -16,11 +16,16 @@ sentence-transformers==3.3.1
 # --- API layer (Phase 11) ---
 fastapi==0.115.6
 uvicorn==0.32.1
-pydantic==2.10.3
+pydantic==2.13.4
 
 # --- Local + cloud inference ---
-ollama==0.4.4
-anthropic==0.40.0
+# ollama>=0.6 required: google-genai needs httpx>=0.28.1, which conflicts
+# with ollama==0.4.4's httpx<0.28 pin. Pin httpx explicitly so a fresh
+# install doesn't have to re-discover this resolution.
+ollama==0.6.2
+google-genai==2.18.1
+groq==1.6.0
+httpx==0.28.1
 
 # --- Utilities ---
 python-dotenv==1.0.1

@@ -8,6 +8,7 @@ mlruns/
 *.joblib
 data/raw/*
 data/processed/
+backend/classifier/models/artifacts/
 models/*.bin
 models/*.pt
 node_modules/

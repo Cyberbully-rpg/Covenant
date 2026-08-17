@@ -28,6 +28,9 @@ venv\Scripts\activate
 pip install -r requirements.txt
 dvc init
 
+# Run the whole test suite (41 tests)
+pytest backend -q
+
 # Run the full segmenter test suite
 pytest backend/segmenter/test_segmenter.py -v
 
@@ -36,6 +39,10 @@ pytest backend/segmenter/test_segmenter.py::test_article_scheme_detected -v
 
 # Run segmenter manually against a sample contract
 python backend/segmenter/segmenter.py data/interim/harpoon_sample.txt
+
+# Classifier (Phase 4) — build labels, then train the baseline
+python backend/classifier/data/build_training_data.py  # + gold-span capture rate
+python backend/classifier/models/train_baseline.py     # + MLflow run
 ```
 
 There is no lint/format/build tooling configured yet, and no `pytest.ini`/`pyproject.toml` — pytest
@@ -109,9 +116,11 @@ CUAD JSON → Segmenter → ⎡ raw text      → Classifier (41-label, TF-IDF+L
 
 ### Current phase
 
-Phase 2 (segmentation engine) — design locked, implementation in progress (`backend/segmenter/`).
-Phases 0–1 (repo scaffolding, CUAD data acquisition/EDA) are complete. See `ARCHITECTURE.md` §5 for the
-full 13-phase roadmap and status table before assuming what's built.
+Phase 5 (classifier feature improvements) — not started; next up. Phases 0–4 are complete: repo
+scaffolding, CUAD acquisition/EDA, segmenter, eval harness (steps 1–2; step 3 deferred to Phase 7),
+and the classical classifier baseline (`backend/classifier/`, macro-F1 0.430 / micro-F1 0.488).
+See `ARCHITECTURE.md` §5 for the full 13-phase roadmap and status table before assuming what's built,
+and §6B for the Phase 4 numbers Phase 5 has to beat.
 
 ## Working conventions specific to this project
 

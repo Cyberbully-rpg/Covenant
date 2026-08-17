@@ -159,10 +159,10 @@ Routing is resolved by **which code path is executing**, never by a request-time
 |---|---|---|---|
 | **0** | Repo & environment scaffolding | ✅ **Complete** | `git init`, `.gitignore`, monorepo skeleton, DVC init, initial commit + push |
 | **1** | Data acquisition + exploration | ✅ **Complete** | CUAD pulled, label distribution / span length / contract length examined, structure variance spot-checked (EDA notebook) |
-| **2** | Segmentation engine | ✅ **Complete** | Cascading pattern-detection segmenter, 15 tests, validated against real CUAD contracts. Generalization gap found and fixed during Phase 3 (see §6) |
+| **2** | Segmentation engine | ✅ **Complete** | Cascading pattern-detection segmenter, 16 tests, validated against real CUAD contracts. Generalization gap found and fixed during Phase 3 (see §6) |
 | **3** | Eval harness skeleton | 🔶 **Steps 1–2 complete; step 3 deferred to Phase 7 (current phase)** | Eval set from CUAD's native QA triples + retrieval-correctness metric + baselines ✅. Faithfulness judge & logging schema → Phase 7 |
-| **4** | Classical classifier baseline | ⬜ Not started (next) | TF-IDF + weighted logreg/XGBoost, all 41 categories, MLflow tracking begins |
-| **5** | Classifier feature improvements | ⬜ Not started | Evidence-gated, locked priority order (n-grams → structural features → threshold tuning → imbalance handling → ensembling) |
+| **4** | Classical classifier baseline | ✅ **Complete** | Training-set construction from gold spans + contract-level split + TF-IDF/weighted-logreg baseline over all 41 categories, MLflow tracking live (see §6B) |
+| **5** | Classifier feature improvements | ⬜ Not started (next) | Evidence-gated, locked priority order (n-grams → structural features → threshold tuning → imbalance handling → ensembling) |
 | **6** | RAG retrieval path | ⬜ Not started | Chroma ingestion, retrieval logic, full-document search validated against harness before generation added |
 | **7** | RAG generation + inference backend | ⬜ Not started | Ollama/cloud routing wired in, faithfulness judge + harness logging schema built and go live (deferred here from Phase 3, step 3) |
 | **8** | Classifier-to-RAG hard filter integration | ⬜ Not started | Metadata filter wired in, filter-on/filter-off precision@k ablation run as portfolio artifact |
@@ -248,6 +248,57 @@ Two trivial retrievers bracket the problem before Phase 6 exists. Full corpus, 5
 
 ---
 
+## 6B. Phase 4 (Classical Classifier Baseline) — Complete
+
+Built in `backend/classifier/`. Three pieces: training-set construction, the contract-level split, and the baseline model.
+
+### 6B.1 Label construction (`data/build_training_data.py`)
+
+A segment carries label C if its character span **overlaps any** gold answer span for C in that contract. This reuses Phase 3's `spans_overlap` primitive rather than reimplementing it, so "what counts as a hit" is defined once across eval and training.
+
+Full corpus, 510 contracts:
+
+| Metric | Value |
+|---|---|
+| Segments | 20,874 |
+| With ≥1 label | 5,732 (27.5%) |
+| Unlabeled (negatives) | 15,142 (72.5%) |
+| Gold spans | 13,823 |
+| **Captured by some segment** | **13,801 (99.84%)** |
+
+**Gold-span capture rate is the segmentation ceiling**, measured before any model is trained: a gold span no segment overlaps is a label the classifier can never learn and retrieval can never hit. At 99.84%, Phase 2's segmentation is not the binding constraint on Phase 4/5 numbers.
+
+**Segmenter fix this exposed:** `cut_top_level` was discarding everything before the first header. That region is the title block, parties recital and execution date — the only place Document Name / Parties / Agreement Date / Effective Date ever appear. It is now emitted as a `[preamble]` segment. Measured corpus-wide over all 13,823 gold spans, **capture rate 79.45% → 99.84%** — one-fifth of all labels in the dataset were unreachable. Same pattern as §6.1: a defect all unit tests passed, caught by measuring against gold.
+
+**Class imbalance, reported not buried** (per TRD §4.1) — positives per category: min 22 (`Unlimited/All-You-Can-Eat-License`), median 200, max 653 (`License Grant`). 6/41 categories have <50 positive segments and 10/41 have <100, corpus-wide, before any split. Those categories cannot produce meaningful F1 regardless of model, and that is a data finding, not a model failure.
+
+### 6B.2 Split discipline (`data/split.py`)
+
+**By contract, never by segment**, deterministic given (contract ids, seed) and independent of row order. Segments within one contract share vocabulary, defined terms, party names and near-verbatim boilerplate; a segment-level split puts near-duplicates on both sides and inflates every downstream number *silently*. 7 tests, the load-bearing one asserting contract-disjointness. 408 train / 102 test contracts at seed 42.
+
+### 6B.3 Baseline model (`models/train_baseline.py`)
+
+TF-IDF unigram (`min_df=3`, `max_df=0.9`, sublinear tf) → one-vs-rest `LogisticRegression(class_weight="balanced")`, one binary model per category. 16,089 train / 4,785 test segments, 12,384 features, fits in ~12s.
+
+| | Precision | Recall | F1 |
+|---|---|---|---|
+| **macro** | 0.338 | 0.632 | **0.430** |
+| **micro** | 0.363 | 0.742 | **0.488** |
+
+**No blended accuracy is computed anywhere in this path** — at ~2% positive rate per category an all-negative predictor scores >97% "accurate". A test asserts the results dict contains no `accuracy` key.
+
+Range across the 41 categories: `No-Solicit Of Employees` 0.833 and `Governing Law` 0.818 at the top; `Most Favored Nation` and `Price Restrictions` at 0.000 (29 and 26 train positives respectively). 2/41 categories sit at F1 = 0.000.
+
+**The shape of the failure, which sets Phase 5's priority:** recall is roughly 2× precision almost everywhere — `class_weight="balanced"` buys recall by over-predicting. This is a *threshold* problem before it is a representation problem, which is direct evidence for escalation-ladder step 3 (per-category threshold tuning, no retraining needed) alongside step 1 (n-grams). Deliberately **not** folded into this run: each ladder step needs its own MLflow run to count as evidence.
+
+Unigrams are used deliberately as the weakest reasonable representation — this is the floor n-grams have to beat.
+
+### 6B.4 MLflow
+
+Tracking starts here, local file store (`file:./mlruns`, git-ignored), experiment `covenant-classifier`. Params, headline metrics, and all 123 per-category metrics logged per run.
+
+---
+
 ## 7. Environment & Tooling Snapshot
 
 - **Repo:** `C:\Dev\Covenant\` (monorepo; relocated from OneDrive Desktop to avoid DVC/Chroma file-lock conflicts)
@@ -261,7 +312,7 @@ Two trivial retrievers bracket the problem before Phase 6 exists. Full corpus, 5
 - **Structured data store:** SQLite
 - **Multi-agent roles:** Claude = architect, Gemini = debugger, Grok = tester
 - **Coordination artifact:** `PROJECT_LEDGER.md` — *not currently in the repo; `ledger.md` was removed in the Phase 2 commit. This doc set (PRD/TRD/ARCHITECTURE) plus `CLAUDE.md` is the de facto handoff artifact.*
-- **Testing:** pytest, defaults (no `pytest.ini`/`pyproject.toml`). Test files sit beside the module they test. Current suite: 27 tests (15 segmenter + 12 eval scorer)
+- **Testing:** pytest, defaults (no `pytest.ini`/`pyproject.toml`). Test files sit beside the module they test. Current suite: 41 tests (16 segmenter + 12 eval scorer + 7 split + 6 classifier baseline)
 
 ### 7.1 Generated artifacts (not in git)
 
@@ -270,6 +321,15 @@ Two trivial retrievers bracket the problem before Phase 6 exists. Full corpus, 5
 ```powershell
 python backend/eval/harness/build_eval_set.py          # rebuild eval set
 python backend/eval/harness/run_baselines.py --limit 0 # re-run baselines (all 510)
+```
+
+`data/processed/classifier/` (`training_segments.jsonl`, `label_stats.json`),
+`backend/classifier/models/artifacts/` (model + metrics) and `mlruns/` are likewise
+git-ignored — regenerate with:
+
+```powershell
+python backend/classifier/data/build_training_data.py   # labels + capture rate
+python backend/classifier/models/train_baseline.py      # train + report + MLflow
 ```
 
 DVC-tracking these is Phase 9 work (TRD §9.1), not yet done.

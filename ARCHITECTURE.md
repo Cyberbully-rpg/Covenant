@@ -372,7 +372,21 @@ Motivated directly by §6C.5's finding: a zero-shot LLM with **zero training exa
 
 **Why a TF-IDF-based similarity feature is a partial fix, not the fix:** cosine similarity between two bag-of-words vectors is still just weighted word overlap between the clause and CUAD's question text — it doesn't capture the actual relational reasoning ("an exception carved out of a Non-Compete clause defined elsewhere in the document") that the zero-shot LLM's contextual understanding does. The natural non-speculative next step is **not** transformer fine-tuning (still shelved per TRD §4.2) — it's reusing the sentence-transformer embeddings Phase 6 is already building for RAG chunking as a classifier feature, once they exist. That's deferred to whenever Phase 6 lands, not run now.
 
-**Decision on steps 4–5 (SMOTE/ensembling): still not run.** The richer-features experiment didn't invalidate the original read — it's still a representation ceiling, and the richer-features attempt (candidate B) getting *some* real per-category wins where SMOTE/ensembling would only synthesize or combine more of the same weak word-count vectors reinforces rather than reverses that conclusion. Left open for the project owner to decide: accept the current champion (macro-F1 0.501, with the 3 categories as a documented, honestly-reported limitation) and move to Phase 6, or hold Phase 5 open for the embedding-feature idea once Phase 6's sentence-transformers exist.
+**Decision on steps 4–5 (SMOTE/ensembling): still not run as ladder steps** — but step 4 (SMOTE) was tested directly against the similarity-feature follow-up on the project owner's request; see §6C.7.
+
+### 6C.7 SMOTE, tested directly against the richer-features follow-up
+
+Run as a scratch comparison, **not integrated or committed** — `imbalanced-learn` was pip-installed locally for this test only (not added to `requirements.txt`), and the test script itself was not added to the repo. Applied `SMOTE` per-category (oversampling that category's own training positives) on top of the champion's exact feature matrix (bigrams + structural features), for the 3 target categories only, at seed 42.
+
+| category | real test positives | champion F1 | SMOTE F1 | similarity-feature F1 |
+|---|---|---|---|---|
+| `Competitive Restriction Exception` | 12 | 0.000 | **0.000** (0 predicted positive) | 0.000 at seed 42 |
+| `Third Party Beneficiary` | 11 | 0.000 | **0.000** (0 predicted positive) | 0.000 at seed 42, **0.200 at seed 123** |
+| `Price Restrictions` | **0** (vacuous at this seed) | 0.000 | 0.000 (undefined, not a real failure) | 0.000 at seed 42, **0.162 at seed 7** |
+
+SMOTE manufactured 12,000+ synthetic training rows per category (real positives oversampled to match the negative class count) and still predicted **zero positives on every real test case** for both categories that actually had test-side positives to find. This is exactly the failure mode TRD §4.3 step 4's own caveat names: *"oversampling on TF-IDF vectors can generate synthetic vectors that don't correspond to any real sentence"* — the synthetic points apparently pulled the decision boundary in a direction that doesn't generalize to real clause text at all, worse than doing nothing.
+
+**Verdict: the richer-features approach (§6C.6) clearly outperforms SMOTE.** The similarity feature never made things worse and occasionally produced a real per-category win; SMOTE never produced a single one across either real test case tried, despite manufacturing thousands of synthetic training examples. This closes the loop on TRD §4.3 step 4 for these categories with actual evidence rather than the earlier data-scarcity inference alone — **step 4 is now ruled out, not just deprioritized.**
 
 ---
 

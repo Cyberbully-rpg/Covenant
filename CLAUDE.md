@@ -46,7 +46,22 @@ python backend/classifier/models/train_baseline.py     # + MLflow run
 
 # Classifier (Phase 5) — escalation ladder (n-grams -> structural -> tuned thresholds)
 python backend/classifier/models/train_experiment.py   # + MLflow run per step
+
+# RAG (Phase 6) — build the vector store, then measure retrieval variants
+python backend/rag/ingestion/ingest.py --limit 0       # 510 contracts -> 45,254 windowed records
+python backend/eval/harness/run_retrieval_variants.py --variants all --limit 0
+python backend/eval/harness/run_retrieval_variants.py --variants hybrid_bigram_prior --limit 0 --split test
+python backend/eval/harness/run_ceiling.py            # segmentation ceiling (0.9985)
+python backend/eval/harness/run_rank_diagnostic.py    # rank distribution + per-category
 ```
+
+The variant sweep is the only way retrieval numbers should be produced — it runs every variant through
+the same `scorer.score_query()` on the same 6,702 rows at the same k, and re-runs `tfidf`/`dense` as
+controls so harness drift shows up immediately. Ingesting under a different embedding model means
+setting `COVENANT_EMBED_MODEL` for *both* the ingest and the sweep; collections are namespaced per
+model so the two can never silently mix. Any variant that fits something (the lead prior) must be
+reported on `--split test` — the harness fits on the train side only and refuses to write split or
+partial runs into `baseline_results.json`.
 
 There is no lint/format/build tooling configured yet, and no `pytest.ini`/`pyproject.toml` — pytest
 runs with defaults. Each `backend/<subsystem>/` package is a plain module with an `__init__.py`; test
@@ -119,13 +134,26 @@ CUAD JSON → Segmenter → ⎡ raw text      → Classifier (41-label, TF-IDF+L
 
 ### Current phase
 
-Phase 5 (classifier feature improvements) — steps 1–3 complete (n-grams, structural features, tuned
-thresholds all adopted; macro-F1 0.430 → 0.501). Zero-shot LLM diagnostic and the steps 4–5
-(SMOTE/ensembling) decision are pending — blocked on a live Ollama instance or a cloud API key, neither
-configured in this environment yet. Phases 0–4 are complete: repo scaffolding, CUAD acquisition/EDA,
-segmenter, eval harness (steps 1–2; step 3 deferred to Phase 7), and the classical classifier baseline.
-See `ARCHITECTURE.md` §5 for the full 13-phase roadmap and status table before assuming what's built,
-and §6C for the Phase 5 ladder results and what's still open.
+Phase 6 (RAG retrieval path) is complete. The adopted default is `hybrid_bigram_prior` — RRF fusion of
+bigram TF-IDF and windowed dense retrieval, plus a leading-segment positional prior for the four
+document-metadata categories. **0.8351 hit_rate@5 on 102 held-out contracts**, against 0.6934 for the
+Phase 3 TF-IDF baseline. Three things must travel with that number: the segmentation ceiling is 0.9985
+(so remaining misses are ranking, never chunking); the dense half does **not** separate from lexical
+alone out of sample and is kept on an argued basis, not a measured one (TRD §7.2); and anything fitted
+is reported on `--split test` only. See `ARCHITECTURE.md` §6D for the variant tables, the truncation
+confound found in the first measurement, and the rank/coverage diagnostics.
+**Phase 7 (generation + inference backend routing) is next**, and it inherits Phase 3's deferred
+step 3 (faithfulness judge + logging schema).
+
+Phase 5 (classifier feature improvements) is partially open: steps 1–3 are complete (n-grams,
+structural features, tuned thresholds; macro-F1 0.430 → 0.503) and steps 4–5 (SMOTE/ensembling) were
+explicitly deferred. The zero-shot LLM diagnostic remains blocked on a live Ollama instance or a cloud
+API key, neither configured in this environment. §6C notes a deferred idea now unblocked: reusing the
+Phase 6 sentence-transformer embeddings as a classifier feature — those embeddings now exist.
+
+Phases 0–4 are complete: repo scaffolding, CUAD acquisition/EDA, segmenter, eval harness (steps 1–2),
+and the classical classifier baseline. See `ARCHITECTURE.md` §5 for the full 13-phase roadmap and
+status table before assuming what's built.
 
 ## Working conventions specific to this project
 

@@ -149,9 +149,33 @@ step 3 (faithfulness judge + logging schema).
 
 Phase 5 (classifier feature improvements) is partially open: steps 1–3 are complete (n-grams,
 structural features, tuned thresholds; macro-F1 0.430 → 0.503) and steps 4–5 (SMOTE/ensembling) were
-explicitly deferred. The zero-shot LLM diagnostic remains blocked on a live Ollama instance or a cloud
-API key, neither configured in this environment. §6C notes a deferred idea now unblocked: reusing the
-Phase 6 sentence-transformer embeddings as a classifier feature — those embeddings now exist.
+explicitly deferred. Two items previously recorded as blocked are **no longer blocked** and can be
+run whenever it's worth the time: the zero-shot LLM diagnostic (see "Inference backends" below), and
+§6C's parked idea of reusing the Phase 6 sentence-transformer embeddings as a classifier feature —
+those embeddings now exist.
+
+### Inference backends (verified working, 2026-08-21)
+
+All three are configured and were checked live, so **do not assume generation work is blocked**:
+
+- **Ollama** — running on `localhost:11434` with `llama3.2:3b` pulled. Only that model is present;
+  anything larger needs an explicit `ollama pull` first, and on this CPU-only box a 7–8B model will be
+  noticeably slower per answer.
+- **Gemini** — `GEMINI_API_KEY` in `.env`, validated (50 models visible, incl. `gemini-2.5-flash`).
+- **Groq** — `GROQ_API_KEY` in `.env`, validated (13 models visible).
+
+`.env` is gitignored and holds only those two key names. Load it explicitly with an absolute path
+(`load_dotenv(r"C:\Dev\Covenant\.env")`) — bare `load_dotenv()` raises an AssertionError when the
+calling frame has no file, e.g. code piped in via stdin.
+
+Routing is locked in TRD §6.2 and is **code-path-determined, never a user-facing toggle**: interactive
+generation always Ollama; batch eval Ollama or cloud per run; the faithfulness judge always cloud,
+always a separate call, and **never the same model that produced the answer being judged** — so with
+Ollama generating, the judge must be Gemini or Groq.
+
+Cost note for Phase 7: generation eval is one LLM call per row plus one judge call, so the full 6,702
+rows is ~13,400 API calls. Use a sampled subset and record the sample size the same way the retrieval
+scope claim is recorded, or faithfulness numbers won't be comparable across runs.
 
 Phases 0–4 are complete: repo scaffolding, CUAD acquisition/EDA, segmenter, eval harness (steps 1–2),
 and the classical classifier baseline. See `ARCHITECTURE.md` §5 for the full 13-phase roadmap and

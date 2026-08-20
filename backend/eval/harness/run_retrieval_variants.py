@@ -52,6 +52,8 @@ from scorer import score_query, aggregate_scores  # noqa: E402
 from tfidf import TfidfRetriever  # noqa: E402
 from retrieve import ChromaRetriever  # noqa: E402
 from hybrid import HybridRetriever  # noqa: E402
+from rerank import CrossEncoderReranker  # noqa: E402
+from query import CleanQueryRetriever  # noqa: E402
 from lead_prior import LeadPrior, PriorRetriever  # noqa: E402
 from ingestion.ingest import collection_name, LEGACY_COLLECTION_NAME  # noqa: E402
 
@@ -60,7 +62,9 @@ from split import split_contract_ids  # noqa: E402
 
 EVAL_DIR = Path("data/processed/eval")
 ALL_VARIANTS = ["tfidf", "tfidf_bigram", "dense", "dense_win", "hybrid", "hybrid_bigram",
-                "tfidf_bigram_prior", "hybrid_bigram_prior"]
+                "tfidf_bigram_prior", "hybrid_bigram_prior", "hybrid_char_prior",
+                "hybrid_bigram_rerank", "hybrid_bigram_prior_rerank",
+                "hybrid_bigram_prior_cleanq", "hybrid_bigram_prior_cleanq_rerank"]
 
 
 def build_variant(key: str, prior: LeadPrior | None = None):
@@ -112,6 +116,50 @@ def build_variant(key: str, prior: LeadPrior | None = None):
         base = HybridRetriever(collection_name=collection_name(windowed=True),
                                lexical_ngram_range=(1, 2))
         r = PriorRetriever(base, prior, name=key)
+        return lambda qs, s, c, k: r.retrieve_batch(qs, s, c, k)
+    if key == "hybrid_char_prior":
+        # Adds character n-grams as a third RRF ranker — the "fuzzy search"
+        # lever. Equal weight, untuned, same discipline as the other two.
+        if prior is None:
+            raise SystemExit("hybrid_char_prior needs a fitted LeadPrior")
+        base = HybridRetriever(collection_name=collection_name(windowed=True),
+                               lexical_ngram_range=(1, 2), w_char=1.0)
+        r = PriorRetriever(base, prior, name=key)
+        return lambda qs, s, c, k: r.retrieve_batch(qs, s, c, k)
+    if key == "hybrid_bigram_rerank":
+        base = HybridRetriever(collection_name=collection_name(windowed=True),
+                               lexical_ngram_range=(1, 2))
+        r = CrossEncoderReranker(base, name=key)
+        return lambda qs, s, c, k: r.retrieve_batch(qs, s, c, k)
+    if key == "hybrid_bigram_prior_rerank":
+        if prior is None:
+            raise SystemExit("hybrid_bigram_prior_rerank needs a fitted LeadPrior")
+        base = HybridRetriever(collection_name=collection_name(windowed=True),
+                               lexical_ngram_range=(1, 2))
+        # Rerank FIRST, then apply the prior. The other order would let the
+        # cross-encoder demote the lead segment straight back out of the top
+        # k, undoing the one thing it cannot score for itself: the metadata
+        # categories whose answer shares no vocabulary with the question.
+        r = PriorRetriever(CrossEncoderReranker(base), prior, name=key)
+        return lambda qs, s, c, k: r.retrieve_batch(qs, s, c, k)
+    if key == "hybrid_bigram_prior_cleanq":
+        if prior is None:
+            raise SystemExit("hybrid_bigram_prior_cleanq needs a fitted LeadPrior")
+        base = HybridRetriever(collection_name=collection_name(windowed=True),
+                               lexical_ngram_range=(1, 2))
+        # CleanQuery sits BELOW the prior: the prior reads the category out of
+        # the original probe text, which stripping would remove.
+        r = PriorRetriever(CleanQueryRetriever(base), prior, name=key)
+        return lambda qs, s, c, k: r.retrieve_batch(qs, s, c, k)
+    if key == "hybrid_bigram_prior_cleanq_rerank":
+        if prior is None:
+            raise SystemExit("hybrid_bigram_prior_cleanq_rerank needs a fitted LeadPrior")
+        base = HybridRetriever(collection_name=collection_name(windowed=True),
+                               lexical_ngram_range=(1, 2))
+        # The reranker was measured HURTING when fed the raw instruction
+        # template (0.85 -> 0.65 on a 20-contract probe). This variant asks
+        # whether that was the cross-encoder failing or the input being wrong.
+        r = PriorRetriever(CleanQueryRetriever(CrossEncoderReranker(base)), prior, name=key)
         return lambda qs, s, c, k: r.retrieve_batch(qs, s, c, k)
     raise SystemExit(f"unknown variant: {key} (choose from {ALL_VARIANTS})")
 

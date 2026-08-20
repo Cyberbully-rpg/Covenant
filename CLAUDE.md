@@ -134,10 +134,12 @@ CUAD JSON → Segmenter → ⎡ raw text      → Classifier (41-label, TF-IDF+L
 
 ### Current phase
 
-Phase 6 (RAG retrieval path) is complete. The adopted default is `hybrid_bigram_prior` — RRF fusion of
-bigram TF-IDF and windowed dense retrieval, plus a leading-segment positional prior for the four
-document-metadata categories. **0.8351 hit_rate@5 on 102 held-out contracts**, against 0.6934 for the
-Phase 3 TF-IDF baseline. Three things must travel with that number: the segmentation ceiling is 0.9985
+Phase 6 (RAG retrieval path) is complete. The adopted default is `hybrid_bigram_prior_cleanq` — RRF fusion
+of bigram TF-IDF and windowed dense retrieval, plus a leading-segment positional prior for the four
+document-metadata categories and query-boilerplate stripping. **0.8460 hit_rate@5 on 102 held-out
+contracts**, against 0.6934 for the Phase 3 TF-IDF baseline. Four further escalations were measured
+and three rejected on evidence (char n-grams, cross-encoder reranking, a retrieval-tuned embedding
+model) — see TRD §7.5 before re-proposing any of them. Three things must travel with that number: the segmentation ceiling is 0.9985
 (so remaining misses are ranking, never chunking); the dense half does **not** separate from lexical
 alone out of sample and is kept on an argued basis, not a measured one (TRD §7.2); and anything fitted
 is reported on `--split test` only. See `ARCHITECTURE.md` §6D for the variant tables, the truncation

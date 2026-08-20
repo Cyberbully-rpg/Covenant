@@ -40,8 +40,10 @@ def _hybrid(lex_spans, dense_spans, **kwargs):
     h.depth = kwargs.get("depth", 20)
     h.w_lexical = kwargs.get("w_lexical", 1.0)
     h.w_dense = kwargs.get("w_dense", 1.0)
+    h.w_char = kwargs.get("w_char", 0.0)
     h.lexical = _StubRanker(lex_spans)
     h.dense = _StubRanker(dense_spans)
+    h.char = None
     return h
 
 
@@ -94,3 +96,16 @@ def test_depth_limits_how_deep_each_ranker_contributes():
 def test_empty_rankings_yield_no_spans_rather_than_raising():
     h = _hybrid([], [])
     assert h.retrieve("q", [], "cid", k=5) == []
+
+
+def test_char_ranker_contributes_when_weighted_and_is_absent_when_not():
+    """The char n-gram ranker is a third RRF input, off by default so adding
+    the capability changes no previously-measured result."""
+    h = _hybrid([A], [A], w_char=1.0)
+    h.char = _StubRanker([D])
+    out = h.retrieve("q", [], "cid", k=2)
+    assert D in out, "a weighted char ranking must reach the fused result"
+
+    off = _hybrid([A], [A])
+    off.char = _StubRanker([D])
+    assert D not in off.retrieve("q", [], "cid", k=2)

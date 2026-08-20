@@ -65,19 +65,30 @@ class HybridRetriever:
         w_lexical: float = 1.0,
         w_dense: float = 1.0,
         lexical_ngram_range: tuple[int, int] = (1, 1),
+        w_char: float = 0.0,
+        char_ngram_range: tuple[int, int] = (3, 5),
         name: str | None = None,
     ):
         self.depth = depth
         self.w_lexical = w_lexical
         self.w_dense = w_dense
+        # Optional third ranker: character n-gram TF-IDF, off by default so
+        # adding the capability changes no existing result. At w_char=0 it is
+        # never constructed or queried.
+        self.w_char = w_char
         self.lexical = TfidfRetriever(ngram_range=lexical_ngram_range)
         self.dense = ChromaRetriever(collection_name=collection_name)
+        self.char = (TfidfRetriever(ngram_range=char_ngram_range, analyzer="char_wb")
+                     if w_char else None)
         if name:
             self.name = name
 
-    def _fuse(self, lex_spans: list, dense_spans: list, k: int) -> list[tuple[int, int]]:
+    def _fuse(self, lex_spans: list, dense_spans: list, k: int,
+              char_spans: list | None = None) -> list[tuple[int, int]]:
         scores: dict[tuple[int, int], float] = {}
-        for weight, ranking in ((self.w_lexical, lex_spans), (self.w_dense, dense_spans)):
+        rankings = [(self.w_lexical, lex_spans), (self.w_dense, dense_spans),
+                    (getattr(self, "w_char", 0.0), char_spans or [])]
+        for weight, ranking in rankings:
             if weight == 0:
                 continue
             for rank, span in enumerate(ranking, start=1):
@@ -93,11 +104,16 @@ class HybridRetriever:
         )
         return [span for span, _ in ordered[:k]]
 
+    def _char_spans(self, question: str, segments: list) -> list:
+        char = getattr(self, "char", None)
+        return char.rank_spans(question, segments, self.depth) if char else []
+
     def _fused(self, question: str, segments: list, contract_id: str, k: int) -> list[tuple[int, int]]:
         return self._fuse(
             self.lexical.rank_spans(question, segments, self.depth),
             self.dense.rank_spans(question, contract_id, self.depth),
             k,
+            self._char_spans(question, segments),
         )
 
     def retrieve(self, question: str, segments: list, contract_id: str, k: int = 5) -> list[tuple[int, int]]:
@@ -111,7 +127,8 @@ class HybridRetriever:
         contract's segments."""
         dense_batch = self.dense.rank_spans_batch(questions, contract_id, self.depth)
         return [
-            self._fuse(self.lexical.rank_spans(q, segments, self.depth), dense_batch[i], k)
+            self._fuse(self.lexical.rank_spans(q, segments, self.depth), dense_batch[i], k,
+                       self._char_spans(q, segments))
             for i, q in enumerate(questions)
         ]
 

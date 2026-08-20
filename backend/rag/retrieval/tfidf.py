@@ -26,8 +26,17 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 class TfidfRetriever:
     name = "tfidf"
 
-    def __init__(self, ngram_range: tuple[int, int] = (1, 1)):
+    def __init__(self, ngram_range: tuple[int, int] = (1, 1), analyzer: str = "word"):
         self.ngram_range = ngram_range
+        # analyzer="char_wb" gives the approximate-matching behaviour people
+        # mean by "fuzzy search": it matches on character n-grams inside word
+        # boundaries, so exclusivity/exclusive/exclusively share most of their
+        # features, as do OCR-damaged spellings. Measured motivation: 62.8% of
+        # Exclusivity gold spans and 25.2% of Non-Compete ones contain only a
+        # STEM of the query's words, which word-level TF-IDF treats as
+        # unrelated tokens (ARCHITECTURE.md §6D.4). It cannot help where the
+        # words are absent entirely, which is most of the remaining failures.
+        self.analyzer = analyzer
 
     def _rank(self, question: str, segments: list, k: int) -> list[tuple[int, float]]:
         """Return (segment_index, score) pairs, highest first, length <= k."""
@@ -36,7 +45,10 @@ class TfidfRetriever:
         texts = [s.embedding_text for s in segments]
         try:
             vec = TfidfVectorizer(
-                stop_words="english",
+                # stop_words is a word-analyzer concept; sklearn warns and
+                # ignores it under char analyzers, so don't pass it there.
+                stop_words="english" if self.analyzer == "word" else None,
+                analyzer=self.analyzer,
                 ngram_range=self.ngram_range,
                 min_df=1,
             )

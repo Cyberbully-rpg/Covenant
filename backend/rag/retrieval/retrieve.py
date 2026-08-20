@@ -95,7 +95,9 @@ class ChromaRetriever:
         """
         if not questions:
             return []
-        vecs = embed(questions)
+        # is_query=True: models with an asymmetric retrieval instruction (BGE)
+        # need it on this side only. Ingestion never sets it (embedding.py).
+        vecs = embed(questions, is_query=True)
         result = self.collection.query(
             query_embeddings=[v.tolist() for v in vecs],
             n_results=max(k, k * OVERSAMPLE),

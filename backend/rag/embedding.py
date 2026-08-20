@@ -49,6 +49,17 @@ _DIMS = {
 }
 EMBEDDING_DIM = _DIMS.get(MODEL_NAME, 384)
 
+# Asymmetric-retrieval instruction prefixes. BGE models are trained with a
+# short instruction prepended to the QUERY side only; omitting it costs
+# real accuracy and the model gives no indication anything is wrong — the
+# same silent-misuse shape as the truncation confound (§6D.3), so it is
+# handled here rather than left to each call site to remember. Models not
+# listed take no prefix; MiniLM is symmetric and wants none.
+_QUERY_PREFIXES = {
+    "BAAI/bge-base-en-v1.5": "Represent this sentence for searching relevant passages: ",
+    "BAAI/bge-small-en-v1.5": "Represent this sentence for searching relevant passages: ",
+}
+
 # Short tag used to namespace Chroma collections per model, so two models'
 # vectors can never land in the same collection.
 def model_tag(model_name: str | None = None) -> str:
@@ -68,11 +79,24 @@ def max_seq_tokens(model_name: str | None = None) -> int:
     return int(get_model(model_name).max_seq_length)
 
 
-def embed(texts: list[str], model_name: str | None = None) -> np.ndarray:
+def query_prefix(model_name: str | None = None) -> str:
+    return _QUERY_PREFIXES.get(model_name or MODEL_NAME, "")
+
+
+def embed(texts: list[str], model_name: str | None = None,
+          is_query: bool = False) -> np.ndarray:
     """Returns L2-normalized embeddings, shape (len(texts), model dim).
 
     L2-normalized so cosine similarity == dot product == what Chroma's
     cosine space computes without extra work at query time.
+
+    `is_query=True` applies the model's retrieval instruction prefix if it
+    has one. Ingestion must always leave this False and retrieval must
+    always set it True — that asymmetry is the whole point, and getting it
+    backwards degrades silently rather than raising.
     """
     model = get_model(model_name)
+    prefix = query_prefix(model_name) if is_query else ""
+    if prefix:
+        texts = [prefix + t for t in texts]
     return model.encode(texts, normalize_embeddings=True, show_progress_bar=False)

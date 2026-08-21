@@ -160,11 +160,11 @@ Routing is resolved by **which code path is executing**, never by a request-time
 | **0** | Repo & environment scaffolding | ✅ **Complete** | `git init`, `.gitignore`, monorepo skeleton, DVC init, initial commit + push |
 | **1** | Data acquisition + exploration | ✅ **Complete** | CUAD pulled, label distribution / span length / contract length examined, structure variance spot-checked (EDA notebook) |
 | **2** | Segmentation engine | ✅ **Complete** | Cascading pattern-detection segmenter, 16 tests, validated against real CUAD contracts. Generalization gap found and fixed during Phase 3 (see §6) |
-| **3** | Eval harness skeleton | 🔶 **Steps 1–2 complete; step 3 deferred to Phase 7 (current phase)** | Eval set from CUAD's native QA triples + retrieval-correctness metric + baselines ✅. Faithfulness judge & logging schema → Phase 7 |
+| **3** | Eval harness skeleton | ✅ **Complete** | Eval set from CUAD's native QA triples + retrieval-correctness metric + baselines. Step 3 (faithfulness judge + logging schema) discharged in Phase 7 — see §6E |
 | **4** | Classical classifier baseline | ✅ **Complete** | Training-set construction from gold spans + contract-level split + TF-IDF/weighted-logreg baseline over all 41 categories, MLflow tracking live (see §6B) |
 | **5** | Classifier feature improvements | 🔶 **Steps 1–3 complete + diagnostic + richer-features follow-up run; steps 4–5 explicitly deferred** | N-grams + structural features + tuned thresholds + category-similarity feature all adopted, macro-F1 0.430 → 0.503. Diagnostic (3 backends) + trigrams/similarity follow-up both point to a representation ceiling, not label noise or data quantity — see §6C |
 | **6** | RAG retrieval path | ✅ **Complete** | Chroma ingestion (510 contracts → 45,254 windowed records), hybrid RRF retrieval + leading-segment prior, validated against the harness before generation added. Dense-vs-TF-IDF gate measured, a truncation confound in the first measurement found and fixed, segmentation ceiling established at 0.9985. **0.8460 hit_rate@5 on 102 held-out contracts**, vs 0.6934 for the Phase 3 baseline. Four further escalations measured and three rejected on evidence (see §6D) |
-| **7** | RAG generation + inference backend | ⬜ Not started | Ollama/cloud routing wired in, faithfulness judge + harness logging schema built and go live (deferred here from Phase 3, step 3) |
+| **7** | RAG generation + inference backend | 🔶 **Built; first measurement taken, tuning open** | Ollama/cloud routing, faithfulness judge, and harness logging schema all live (discharges Phase 3 step 3). First run: retrieval 0.8500, faithfulness 0.6154 (gemini judge, 100% coverage), abstention on absent clauses 35%. Open: generator is a 3B model, abstention discipline poor, samples capped ~80 rows/day by free-tier quota (see §6E) |
 | **8** | Classifier-to-RAG hard filter integration | ⬜ Not started | Metadata filter wired in, filter-on/filter-off precision@k ablation run as portfolio artifact |
 | **9** | MLOps wrap-up | ⬜ Not started | Drift monitoring (classifier + embeddings) live, query logging fully live, DVC formalized across all datasets |
 | **10** | Risk rating heuristic | ⬜ Not started | Presence/absence lookup table, Method 1 + Method 3 validation |
@@ -518,6 +518,60 @@ The pattern across all four is consistent with §6D.4's diagnosis and worth stat
 
 ---
 
+## 6E. Phase 7 (RAG Generation + Inference Backends) — built, first measurement taken
+
+Built in `backend/rag/generation/` (`backends.py`, `prompt.py`, `generate.py`) and `backend/eval/harness/` (`judge.py`, `log_schema.py`, `run_generation_eval.py`, `rejudge.py`). This also discharges **Phase 3 step 3**, deferred there because a faithfulness judge needs generated answers to score and nothing generated answers until now.
+
+### 6E.1 Routing is structural, not documentary
+
+TRD §6.2 locks three `generate()` call sites that "must not be conflated in code or in logging". They are separated by construction rather than by comment:
+
+- **`generate_interactive()` takes no backend argument at all.** There is no parameter to pass, so no call site can point the live demo at a cloud model, and a test asserts the signature — a future refactor that adds one fails rather than quietly becoming the user-facing toggle §6.2 forbids.
+- **`generate_for_eval()` takes an already-constructed backend**, because a per-run choice is exactly what that rule permits on the batch path.
+- **The judge lives in a different package** (`eval/harness/`), not beside the generators. It requires `generator_identity` as a non-optional argument and raises if it matches its own, so "a model graded its own output" is impossible rather than merely discouraged. It also refuses any non-cloud backend.
+
+### 6E.2 First measurement — 80 rows, held-out contracts
+
+Retrieval `hybrid_bigram_prior_cleanq` at k=5, generator `llama3.2:3b` on Ollama, 60 gold rows + 20 absent rows, seed 42. **The two signals are reported separately and never combined (TRD §3.3).**
+
+**[1] Retrieval correctness — mechanical, ground-truthed, non-gameable**
+
+`hit_rate@5 = 0.8500` on 60 gold rows, against 0.8460 on the full held-out split — consistent, so the sample is not unrepresentative.
+
+**[2] Faithfulness — LLM judge, trend indicator only (TRD §3.4)**
+
+| judge | judged | SUPPORTED | PARTIAL | UNSUPPORTED | faithful_rate | coverage |
+|---|---|---|---|---|---|---|
+| **gemini-3.1-flash-lite** | 52 | 32 | 6 | 14 | **0.6154** | **100%** |
+| groq gpt-oss-120b | 44 | 26 | 4 | 14 | 0.5909 | 87% |
+| groq gpt-oss-20b | 40 | 28 | 5 | 7 | 0.7000 | 80% |
+
+Only the Gemini row is complete; the other two are reported because the spread between them is itself a finding (§6E.3).
+
+**[diagnostic] Abstention on absent clauses.** On the 20 rows where CUAD marks the category absent, the model correctly said "not in the excerpts" **7 times (35%)**. Identical under every judge, because abstention is detected mechanically rather than graded. **Not a metric** — scoring correct abstention needs a calibrated confidence threshold that does not exist (scorer.py).
+
+### 6E.3 What the first run establishes
+
+**The bottleneck moved from retrieval to generation.** Retrieval supplies the right text 85% of the time; the model then makes an unsupported claim in ~27% of the answers it commits to. This is precisely the attribution the decomposed metrics exist for — a single blended score would have read "roughly 70% good" and pointed nowhere.
+
+**Judge choice moves the score by 11 points.** Identical answers, identical retrieval, only the grader changed: 0.5909 → 0.7000, with the UNSUPPORTED count halving from 14 to 7. §3.4's "trend indicator" caveat turns out to understate the problem. Consequences are locked in TRD §6.5: never report faithfulness without naming the judge, and report headline results as a range across two judges.
+
+**The generator abstains far too rarely.** Answering 65% of the time when the clause is not in the contract is, for a lawyer-facing tool, a worse failure than a retrieval miss — a miss looks like a failure, whereas a confident description of a non-existent clause does not.
+
+### 6E.4 Operating inside a free tier, honestly
+
+Groq's free tier allows 200,000 tokens/day **per model**; at ~2,200 tokens per judge call that is ~90 calls/day, and an 80-row run consumes most of one model's budget. Three findings were forced by hitting that wall:
+
+- **Cloud batch-eval generation does not scale here.** Cloud is ~45x faster per call, but the daily cap makes large samples impossible. Local Ollama is slow per call and unlimited — beyond ~80 rows it is the only option without payment. (An earlier recommendation to move batch generation to cloud was wrong for this reason and is retracted in TRD §6.6.)
+- **Quota exhaustion was masquerading as judge failure.** Rate-limited rows were being labelled `UNPARSEABLE` — the same bucket as "the judge replied unreadably". A run consequently reported `faithful_rate 0.80` computed from **5 surviving rows out of 60**. `NOT_JUDGED` is now a distinct label, `judged_coverage` is reported on every run, and both runners stop after 5 consecutive budget failures instead of grinding through doomed calls.
+- **A model appearing in `models.list()` does not mean it is callable.** `gemini-2.5-flash` returns 404, `gemini-3.6-flash` 429, `gemini-3.7-flash` 503, and two Gemini models return empty text even on success. The judge model was chosen on measured coverage (TRD §6.4), not on reputation.
+
+### 6E.5 Tests
+
+40 new tests, all offline with stubbed backends: `test_generation.py` (prompt construction and span labelling, abstention detection, backend failures returned rather than raised, provenance preserved through failure, and the routing rules above asserted by signature inspection) and `test_judge.py` (label parsing including the PARTIALLY_SUPPORTED/SUPPORTED substring trap and `<think>`-block stripping, cloud-only and never-self-judge enforcement, abstentions excluded from the denominator, budget failures separated from grading failures, and the log keeping retrieval and faithfulness in distinct fields). **164 tests total.**
+
+---
+
 ## 7. Environment & Tooling Snapshot
 
 - **Repo:** `C:\Dev\Covenant\` (monorepo; relocated from OneDrive Desktop to avoid DVC/Chroma file-lock conflicts)
@@ -531,7 +585,7 @@ The pattern across all four is consistent with §6D.4's diagnosis and worth stat
 - **Structured data store:** SQLite
 - **Multi-agent roles:** Claude = architect, Gemini = debugger, Grok = tester
 - **Coordination artifact:** `PROJECT_LEDGER.md` — *not currently in the repo; `ledger.md` was removed in the Phase 2 commit. This doc set (PRD/TRD/ARCHITECTURE) plus `CLAUDE.md` is the de facto handoff artifact.*
-- **Testing:** pytest, defaults (no `pytest.ini`/`pyproject.toml`). Test files sit beside the module they test. Current suite: **122 tests** (16 segmenter + 12 eval scorer + 11 split + 6 classifier baseline + 7 structural features + 6 ladder runner + 4 category-similarity + 60 RAG: 8 embedding + 12 ingestion + 7 retrieval + 8 hybrid + 13 lead prior + 6 query + 6 rerank)
+- **Testing:** pytest, defaults (no `pytest.ini`/`pyproject.toml`). Test files sit beside the module they test. Current suite: **164 tests** (16 segmenter + 12 eval scorer + 11 split + 6 classifier baseline + 7 structural features + 6 ladder runner + 4 category-similarity + 60 retrieval RAG: 8 embedding + 12 ingestion + 7 retrieval + 8 hybrid + 13 lead prior + 6 query + 6 rerank + 42 Phase 7: 16 generation + 26 judge/log)
 
 ### 7.1 Generated artifacts (not in git)
 

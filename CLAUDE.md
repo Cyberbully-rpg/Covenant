@@ -53,6 +53,11 @@ python backend/eval/harness/run_retrieval_variants.py --variants all --limit 0
 python backend/eval/harness/run_retrieval_variants.py --variants hybrid_bigram_prior --limit 0 --split test
 python backend/eval/harness/run_ceiling.py            # segmentation ceiling (0.9985)
 python backend/eval/harness/run_rank_diagnostic.py    # rank distribution + per-category
+
+# RAG generation (Phase 7) — retrieve -> generate -> judge -> log
+python backend/eval/harness/run_generation_eval.py --gold-rows 60 --absent-rows 20
+python backend/eval/harness/rejudge.py <run.jsonl>                    # re-grade, no regeneration
+python backend/eval/harness/rejudge.py <run.jsonl> --judge-backend groq  # second judge for §6.5 variance
 ```
 
 The variant sweep is the only way retrieval numbers should be produced — it runs every variant through
@@ -144,8 +149,23 @@ model) — see TRD §7.5 before re-proposing any of them. Three things must trav
 alone out of sample and is kept on an argued basis, not a measured one (TRD §7.2); and anything fitted
 is reported on `--split test` only. See `ARCHITECTURE.md` §6D for the variant tables, the truncation
 confound found in the first measurement, and the rank/coverage diagnostics.
-**Phase 7 (generation + inference backend routing) is next**, and it inherits Phase 3's deferred
-step 3 (faithfulness judge + logging schema).
+**Phase 7 (generation + inference backend routing) is built and has taken its first measurement**,
+which also discharges Phase 3's deferred step 3 (faithfulness judge + logging schema). First run,
+80 rows on the held-out split: retrieval hit_rate@5 0.8500, faithfulness 0.6154 (gemini judge, 100%
+coverage), and the model correctly abstained on only 35% of rows where CUAD says the clause is absent.
+
+Three things must travel with any faithfulness number. **Name the judge** — swapping graders on
+identical answers moved the score 0.591 -> 0.700 (TRD §6.5), so headline results are reported as a
+range across two judges, never a single figure. **Check coverage** — `NOT_JUDGED` (budget exhausted)
+is a distinct label from `UNPARSEABLE` (judge replied unreadably), and a run whose `judged_coverage`
+is below 100% is partial, not a smaller version of the same number. **Respect the quota** — Groq free
+tier is 200k tokens/day *per model*, roughly 90 judge calls, so an 80-row run costs most of one
+model's daily budget. Cloud batch-eval generation does NOT scale here; beyond ~80 rows local Ollama is
+the only option without paying (TRD §6.6).
+
+Still open in Phase 7: the generator is `llama3.2:3b` (small — fabrication and weak abstention are
+both characteristic of undersized models; a 7-8B pull is the untried next lever), and abstention
+discipline needs work as a product concern in its own right.
 
 Phase 5 (classifier feature improvements) is partially open: steps 1–3 are complete (n-grams,
 structural features, tuned thresholds; macro-F1 0.430 → 0.503) and steps 4–5 (SMOTE/ensembling) were

@@ -152,6 +152,36 @@ Ordering B was chosen explicitly over building the classifier/RAG first: every c
 ### 6.3 Accepted Tradeoff
 - This design loses batched-throughput advantages available at larger scale. **Accepted** at portfolio eval-set scale; revisit only if the eval set size or iteration frequency grows significantly enough to make batching's throughput gains material.
 
+### 6.4 Judge Model Selection (locked — chosen on measured coverage)
+
+- **Default judge: `gemini-3.1-flash-lite`.** Selected by running three judges over the identical 80-row generation run:
+
+  | judge | answers judged | unparseable | coverage |
+  |---|---|---|---|
+  | gemini-3.1-flash-lite | 52 | **0** | **100%** |
+  | groq openai/gpt-oss-120b | 44 | 8 | 87% |
+  | groq openai/gpt-oss-20b | 40 | 12 | 80% |
+
+  The gpt-oss models are reasoning models that intermittently return empty content. A judge that silently declines to grade 15–20% of rows shrinks the faithfulness denominator without announcing it, which is worse than grading them badly.
+- **`groq/openai/gpt-oss-20b` is retained as the second judge**, not as a fallback but as the §3.4 variance check — see §6.5.
+- **Pin explicit model versions.** `gemini-flash-latest` is a moving alias; an eval number whose judge silently changed underneath it is not reproducible. Several Gemini models were tested and rejected: `gemini-2.5-flash` returns 404 despite appearing in `models.list()`, `gemini-3.6-flash` returned 429, `gemini-3.7-flash` returned 503, and `gemini-3.6-flash`/`gemini-flash-latest` return empty text even on success. **Appearing in a model list does not mean being callable.**
+
+### 6.5 Judge Variance Must Be Reported (locked)
+
+Measured on identical answers, identical retrieval, changing only the grader: **faithful_rate moved 0.591 → 0.700**, and the UNSUPPORTED count halved from 14 to 7. §3.4 already called the judge score a trend indicator; this quantifies it.
+
+- **A faithfulness number is never reported without naming the judge model**, the same way a retrieval number names k.
+- **Headline results report a range across two judges**, not a single figure. "0.59–0.70 depending on judge" is the honest statement.
+- `rejudge.py` re-grades a stored run without regenerating, which makes the second reading cost minutes rather than an hour — the only reason this is affordable.
+
+### 6.6 Free-Tier Budget Constraints (operational, non-negotiable without payment)
+
+- **Groq free tier: 200,000 tokens/day, per model.** At ~2,200 tokens per judge call (the prompt carries all k excerpts), that is **~90 judge calls per model per day**. An 80-row run consumes roughly 160k tokens — most of one model's daily budget.
+- **Limits are per model and per provider.** `gpt-oss-20b`, `gpt-oss-120b`, `compound-mini` and Gemini each hold separate pools. The judge running on Gemini therefore does not compete with batch-eval generation running on Groq.
+- **Cloud batch-eval generation does not scale on the free tier.** Cloud is ~45x faster per call than local Ollama, but the daily token cap makes large samples impossible; local generation is slow per call and unlimited. For samples beyond ~80 rows, **local is the only option that works without paying.**
+- **Budget exhaustion must never be reported as a judge failure.** `NOT_JUDGED` is a distinct label from `UNPARSEABLE`, and `judged_coverage` is reported on every run. Both runners stop after 5 consecutive budget failures rather than grinding through doomed calls. This was added after a run reported `faithful_rate 0.80` computed from 5 surviving rows out of 60.
+
+
 ---
 
 ## 7. Vector Database
